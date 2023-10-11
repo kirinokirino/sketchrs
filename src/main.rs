@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
 
 const RECORD: bool = false;
 const WIDTH: usize = 640;
@@ -8,47 +8,61 @@ const HEIGHT: usize = 480;
 use glam::Vec2;
 
 fn main() {
-    let ffmpeg_command = "/usr/bin/ffmpeg";
-    let args = "-y -f rawvideo -vcodec rawvideo -s 640x480 -pix_fmt rgba -r 30 -i - -an -vcodec h264 -pix_fmt yuv420p -crf 15 /home/kirinokirino/Media/video.mp4".split(' ');
-    let mut ffmpeg = if RECORD {
-        Some(
-            Command::new(ffmpeg_command)
-                .args(args)
-                .stdin(Stdio::piped())
-                .spawn()
-                .expect("failed to execute process")
-                .stdin
-                .take()
-                .unwrap(),
-        )
-    } else {
-        None
-    };
+    let mut sketch = Sketch::new();
+    sketch.run();
+}
 
-    let mut palette: Vec<_> = ["#df8c00", "#d7ac64", "#36241e", "#4a3d35", "#747769"]
-        .iter()
-        .map(hex_to_rgb)
-        .collect();
-    palette.extend([[0, 0, 0, 0]].repeat(30));
-    let mut canvas = Canvas::new(palette);
-    //canvas.random();
-    loop {
-        canvas.update();
-        canvas.display();
-        if RECORD {
-            ffmpeg.as_mut().map(|mut ffmpeg| {
-                ffmpeg.write_all(
-                    &canvas
-                        .buffer.as_slice()
-                        // .iter()
-                        // .enumerate()
-                        // .filter(|(i, v)| i % 4 != 3)
-                        // .map(|(i, v)| *v)
-                        // .collect::<Vec<u8>>(),
-                )
-            });
+struct Sketch {
+    canvas: Canvas,
+    ffmpeg: Option<ChildStdin>,
+}
+
+impl Sketch {
+    pub fn new() -> Self {
+        let ffmpeg = Self::ffmpeg();
+        let canvas = Self::canvas();
+        Self { canvas, ffmpeg }
+    }
+
+    pub fn run(&mut self) {
+        loop {
+            self.canvas.update();
+            self.canvas.display();
+            if RECORD {
+                self.ffmpeg
+                    .as_mut()
+                    .map(|mut ffmpeg| ffmpeg.write_all(&self.canvas.buffer.as_slice()));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    fn canvas() -> Canvas {
+        let mut palette: Vec<_> = ["#df8c00", "#d7ac64", "#36241e", "#4a3d35", "#747769"]
+            .iter()
+            .map(hex_to_rgb)
+            .collect();
+        palette.extend([[0, 0, 0, 0]].repeat(30));
+        Canvas::new(palette)
+    }
+
+    fn ffmpeg() -> Option<ChildStdin> {
+        let ffmpeg_command = "/usr/bin/ffmpeg";
+        let args = "-y -f rawvideo -vcodec rawvideo -s 640x480 -pix_fmt rgba -r 30 -i - -an -vcodec h264 -pix_fmt yuv420p -crf 15 /home/kirinokirino/Media/video.mp4".split(' ');
+        if RECORD {
+            Some(
+                Command::new(ffmpeg_command)
+                    .args(args)
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .expect("failed to execute process")
+                    .stdin
+                    .take()
+                    .unwrap(),
+            )
+        } else {
+            None
+        }
     }
 }
 
@@ -65,14 +79,22 @@ impl Canvas {
             buffer.set_len(buffer.capacity());
         }
         buffer.fill(0);
-        let pen_color = [255,255,255,255];
-        Self { buffer, palette, pen_color }
+        let pen_color = [255, 255, 255, 255];
+        Self {
+            buffer,
+            palette,
+            pen_color,
+        }
     }
 
     pub fn update(&mut self) {
         self.buffer.fill(0);
         self.draw_circle(Vec2::new(100.0, 100.0), 10.0);
-        self.draw_curve(Vec2::new(20.0, 30.0), Vec2::new(60.0, 250.0), Vec2::new(150.0, 20.0));
+        self.draw_curve(
+            Vec2::new(20.0, 30.0),
+            Vec2::new(60.0, 250.0),
+            Vec2::new(150.0, 20.0),
+        );
         return;
         for pixel in self.buffer.as_mut_slice().chunks_exact_mut(4) {
             pixel[0] = (pixel[0] as i32 + fastrand::i32(-2..3)).min(255).max(0) as u8;
@@ -110,12 +132,12 @@ impl Canvas {
 
     fn draw_curve(&mut self, start: Vec2, control: Vec2, end: Vec2) {
         let points = start.distance(control) + control.distance(end);
-        for i in 1..points as usize{
+        for i in 1..points as usize {
             let proportion = i as f32 / points;
             let path1 = control - start;
             let point1 = start + path1 * proportion;
             let path2 = end - control;
-            let point2 = control +  path2 * proportion;
+            let point2 = control + path2 * proportion;
             let path3 = point2 - point1;
             let point3 = point1 + path3 * proportion;
             self.draw_point(point3);
@@ -141,7 +163,11 @@ impl Canvas {
         let bottom_y = (pos.y + radius) as usize;
         for offset_x in left_x..right_x {
             for offset_y in top_y..bottom_y {
-                if ((offset_x as f32 - pos.x as f32).powi(2) + (offset_y as f32 - pos.y as f32).powi(2)).sqrt() < radius {
+                if ((offset_x as f32 - pos.x as f32).powi(2)
+                    + (offset_y as f32 - pos.y as f32).powi(2))
+                .sqrt()
+                    < radius
+                {
                     self.draw_point(Vec2::new(offset_x as f32, offset_y as f32));
                 }
             }
