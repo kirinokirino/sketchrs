@@ -12,6 +12,7 @@ fn main() {
     sketch.run();
 }
 
+#[derive(Debug, Clone)]
 struct Wanderer {
     pos: Vec2,
     vel: Vec2,
@@ -26,7 +27,10 @@ impl Wanderer {
         let acc = Vec2::new(0.0, 0.0);
         let history = Vec::new();
         Self {
-            pos, vel, acc, history
+            pos,
+            vel,
+            acc,
+            history,
         }
     }
 
@@ -56,8 +60,21 @@ impl Wanderer {
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
+        canvas.select_color(0);
         for past in &self.history {
             canvas.draw_point(*past);
+        }
+        let history = self.history.as_slice().windows(3).rev();
+        for w in history.clone().take(10) {
+            canvas.draw_curve(w[0], w[1], w[2]);
+        }
+        canvas.select_color(1);
+        for w in history.clone().skip(10).take(10) {
+            canvas.draw_curve(w[0], w[1], w[2]);
+        }
+        canvas.select_color(3);
+        for w in history.clone().skip(20).take(10) {
+            canvas.draw_curve(w[0], w[1], w[2]);
         }
     }
 }
@@ -66,7 +83,7 @@ struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
 
-    wanderer: Wanderer,
+    wanderers: Vec<Wanderer>,
 }
 
 impl Sketch {
@@ -74,10 +91,15 @@ impl Sketch {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
         let wanderer = Wanderer::new(Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32));
+        let mut wanderers = Vec::new();
+        for _ in 0..6 {
+            wanderers.push(wanderer.clone());
+        }
+        wanderers.push(wanderer);
         Self {
             canvas,
             ffmpeg,
-            wanderer,
+            wanderers,
         }
     }
 
@@ -90,12 +112,13 @@ impl Sketch {
     }
 
     fn update(&mut self) {
-        self.wanderer.update();
+        self.wanderers.iter_mut().for_each(|w| w.update());
     }
 
     fn draw(&mut self) {
-        self.canvas.buffer.fill(0);
-        self.wanderer.draw(&mut self.canvas);
+        //self.canvas.buffer.fill(0);
+        self.canvas.dim(1);
+        self.wanderers.iter().for_each(|w| w.draw(&mut self.canvas));
 
         if RECORD {
             self.ffmpeg
@@ -110,7 +133,7 @@ impl Sketch {
             .iter()
             .map(hex_to_rgb)
             .collect();
-        palette.extend([[0, 0, 0, 0]].repeat(30));
+        //palette.extend([[0, 0, 0, 0]].repeat(1));
         Canvas::new(palette)
     }
 
@@ -146,13 +169,24 @@ impl Canvas {
         unsafe {
             buffer.set_len(buffer.capacity());
         }
-        buffer.fill(0);
+        buffer.fill(255);
         let pen_color = [255, 255, 255, 255];
         Self {
             buffer,
             palette,
             pen_color,
         }
+    }
+
+    pub fn select_color(&mut self, color: u8) {
+        self.pen_color = self.palette[color as usize % self.palette.len()]
+    }
+
+    pub fn dim(&mut self, value: i16) {
+        self.buffer.iter_mut().for_each(|v| {
+            let new = (*v as i16 + value).min(255).max(0) as u8;
+            *v = new;
+        });
     }
 
     pub fn display(&self) {
@@ -227,6 +261,10 @@ impl Canvas {
 
     fn draw_point(&mut self, pos: Vec2) {
         let buffer_idx = self.idx(pos.x as usize, pos.y as usize);
+        if (buffer_idx + 3) > self.buffer.len() {
+            // TODO err?
+            return;
+        }
         self.buffer[buffer_idx] = self.pen_color[0];
         self.buffer[buffer_idx + 1] = self.pen_color[1];
         self.buffer[buffer_idx + 2] = self.pen_color[2];
