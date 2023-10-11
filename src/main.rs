@@ -15,13 +15,20 @@ fn main() {
 struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
+
+    wanderer: Vec2,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        Self { canvas, ffmpeg }
+        let wanderer = Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
+        Self {
+            canvas,
+            ffmpeg,
+            wanderer,
+        }
     }
 
     pub fn run(&mut self) {
@@ -33,17 +40,18 @@ impl Sketch {
     }
 
     fn update(&mut self) {
-        
+        self.wanderer =
+            self.wanderer + Vec2::new(fastrand::f32() * 4. - 2., fastrand::f32() * 4. - 2.);
     }
 
     fn draw(&mut self) {
         self.canvas.buffer.fill(0);
-        self.canvas.draw_circle(Vec2::new(100.0, 100.0), 10.0);
-        self.canvas.draw_curve(
-            Vec2::new(20.0, 30.0),
-            Vec2::new(60.0, 250.0),
-            Vec2::new(150.0, 20.0),
-        );
+        self.canvas.draw_circle(self.wanderer, 20.0);
+        // self.canvas.draw_curve(
+        //     Vec2::new(20.0, 30.0),
+        //     Vec2::new(60.0, 250.0),
+        //     Vec2::new(150.0, 20.0),
+        // );
 
         if RECORD {
             self.ffmpeg
@@ -118,7 +126,7 @@ impl Canvas {
         }
         let _ = (&mut mmap[..]).write_all(&self.buffer.as_slice());
     }
-    
+
     fn random(&mut self) {
         for pixel in self.buffer.as_mut_slice().chunks_exact_mut(4) {
             let change = self.palette[fastrand::usize(0..self.palette.len())];
@@ -160,8 +168,8 @@ impl Canvas {
         let right_x = (pos.x + radius) as usize;
         let top_y = (pos.y - radius) as usize;
         let bottom_y = (pos.y + radius) as usize;
-        for offset_x in left_x..right_x {
-            for offset_y in top_y..bottom_y {
+        for offset_x in left_x..=right_x {
+            for offset_y in top_y..=bottom_y {
                 if ((offset_x as f32 - pos.x as f32).powi(2)
                     + (offset_y as f32 - pos.y as f32).powi(2))
                 .sqrt()
