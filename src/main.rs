@@ -26,15 +26,31 @@ impl Sketch {
 
     pub fn run(&mut self) {
         loop {
-            self.canvas.update();
-            self.canvas.display();
-            if RECORD {
-                self.ffmpeg
-                    .as_mut()
-                    .map(|mut ffmpeg| ffmpeg.write_all(&self.canvas.buffer.as_slice()));
-            }
+            self.update();
+            self.draw();
             std::thread::sleep(std::time::Duration::from_millis(30));
         }
+    }
+
+    fn update(&mut self) {
+        
+    }
+
+    fn draw(&mut self) {
+        self.canvas.buffer.fill(0);
+        self.canvas.draw_circle(Vec2::new(100.0, 100.0), 10.0);
+        self.canvas.draw_curve(
+            Vec2::new(20.0, 30.0),
+            Vec2::new(60.0, 250.0),
+            Vec2::new(150.0, 20.0),
+        );
+
+        if RECORD {
+            self.ffmpeg
+                .as_mut()
+                .map(|ffmpeg| ffmpeg.write_all(&self.canvas.buffer.as_slice()));
+        }
+        self.canvas.display();
     }
 
     fn canvas() -> Canvas {
@@ -87,25 +103,7 @@ impl Canvas {
         }
     }
 
-    pub fn update(&mut self) {
-        self.buffer.fill(0);
-        self.draw_circle(Vec2::new(100.0, 100.0), 10.0);
-        self.draw_curve(
-            Vec2::new(20.0, 30.0),
-            Vec2::new(60.0, 250.0),
-            Vec2::new(150.0, 20.0),
-        );
-        return;
-        for pixel in self.buffer.as_mut_slice().chunks_exact_mut(4) {
-            pixel[0] = (pixel[0] as i32 + fastrand::i32(-2..3)).min(255).max(0) as u8;
-            pixel[1] = (pixel[1] as i32 + fastrand::i32(-2..3)).min(255).max(0) as u8;
-            pixel[2] = (pixel[2] as i32 + fastrand::i32(-2..3)).min(255).max(0) as u8;
-            pixel[3] = (pixel[3] as i32 + fastrand::i32(-2..3)).min(255).max(0) as u8;
-        }
-    }
-
     pub fn display(&self) {
-        use std::io::Write;
         let file = std::fs::File::options()
             .create(true)
             .read(true)
@@ -118,8 +116,9 @@ impl Canvas {
         if let Some(err) = mmap.lock().err() {
             panic!("{err}");
         }
-        (&mut mmap[..]).write_all(&self.buffer.as_slice());
+        let _ = (&mut mmap[..]).write_all(&self.buffer.as_slice());
     }
+    
     fn random(&mut self) {
         for pixel in self.buffer.as_mut_slice().chunks_exact_mut(4) {
             let change = self.palette[fastrand::usize(0..self.palette.len())];
