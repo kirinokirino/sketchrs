@@ -72,7 +72,7 @@ impl Canvas {
     pub fn update(&mut self) {
         self.buffer.fill(0);
         self.draw_circle(Vec2::new(100.0, 100.0), 10.0);
-        self.draw_line(Vec2::new(20.0, 30.0), Vec2::new(150.0, 20.0));
+        self.draw_curve(Vec2::new(20.0, 30.0), Vec2::new(60.0, 250.0), Vec2::new(150.0, 20.0));
         return;
         for pixel in self.buffer.as_mut_slice().chunks_exact_mut(4) {
             pixel[0] = (pixel[0] as i32 + fastrand::i32(-2..3)).min(255).max(0) as u8;
@@ -105,6 +105,20 @@ impl Canvas {
             pixel[1] = change[1];
             pixel[2] = change[2];
             pixel[3] = change[3];
+        }
+    }
+
+    fn draw_curve(&mut self, start: Vec2, control: Vec2, end: Vec2) {
+        let points = start.distance(control) + control.distance(end);
+        for i in 1..points as usize{
+            let proportion = i as f32 / points;
+            let path1 = control - start;
+            let point1 = start + path1 * proportion;
+            let path2 = end - control;
+            let point2 = control +  path2 * proportion;
+            let path3 = point2 - point1;
+            let point3 = point1 + path3 * proportion;
+            self.draw_point(point3);
         }
     }
 
