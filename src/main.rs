@@ -12,18 +12,68 @@ fn main() {
     sketch.run();
 }
 
+struct Wanderer {
+    pos: Vec2,
+    vel: Vec2,
+    acc: Vec2,
+
+    history: Vec<Vec2>,
+}
+
+impl Wanderer {
+    pub fn new(pos: Vec2) -> Self {
+        let vel = Vec2::new(0.0, 0.0);
+        let acc = Vec2::new(0.0, 0.0);
+        let history = Vec::new();
+        Self {
+            pos, vel, acc, history
+        }
+    }
+
+    pub fn update(&mut self) {
+        self.acc = Vec2::new(fastrand::f32() * 4. - 2., fastrand::f32() * 4. - 2.);
+
+        self.history.push(self.pos);
+        self.pos += self.vel;
+        self.vel += self.acc;
+
+        self.stay_on_canvas();
+
+        self.acc = Vec2::new(0.0, 0.0);
+    }
+
+    fn stay_on_canvas(&mut self) {
+        if self.pos.x <= 0.0 {
+            self.pos.x = WIDTH as f32;
+        } else if self.pos.x >= WIDTH as f32 {
+            self.pos.x = 0.0;
+        }
+        if self.pos.y <= 0.0 {
+            self.pos.y = HEIGHT as f32;
+        } else if self.pos.y >= HEIGHT as f32 {
+            self.pos.y = 0.0;
+        }
+    }
+
+    pub fn draw(&self, canvas: &mut Canvas) {
+        for past in &self.history {
+            canvas.draw_point(*past);
+        }
+    }
+}
+
 struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
 
-    wanderer: Vec2,
+    wanderer: Wanderer,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        let wanderer = Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
+        let wanderer = Wanderer::new(Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32));
         Self {
             canvas,
             ffmpeg,
@@ -40,18 +90,12 @@ impl Sketch {
     }
 
     fn update(&mut self) {
-        self.wanderer =
-            self.wanderer + Vec2::new(fastrand::f32() * 4. - 2., fastrand::f32() * 4. - 2.);
+        self.wanderer.update();
     }
 
     fn draw(&mut self) {
         self.canvas.buffer.fill(0);
-        self.canvas.draw_circle(self.wanderer, 20.0);
-        // self.canvas.draw_curve(
-        //     Vec2::new(20.0, 30.0),
-        //     Vec2::new(60.0, 250.0),
-        //     Vec2::new(150.0, 20.0),
-        // );
+        self.wanderer.draw(&mut self.canvas);
 
         if RECORD {
             self.ffmpeg
