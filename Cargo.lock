@@ -9,15 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 
 [[package]]
-name = "fortune"
-version = "0.1.0"
-dependencies = [
- "fastrand",
- "glam",
- "memmap2",
-]
-
-[[package]]
 name = "glam"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -36,4 +27,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "deaba38d7abf1d4cca21cc89e932e542ba2b9258664d2a9ef0e61512039c9375"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "sketchrs"
+version = "0.1.0"
+dependencies = [
+ "fastrand",
+ "glam",
+ "memmap2",
 ]

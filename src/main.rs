@@ -116,8 +116,14 @@ impl Sketch {
     }
 
     fn draw(&mut self) {
-        //self.canvas.buffer.fill(0);
-        self.canvas.dim(1);
+        //self.canvas.select_color(1);
+        // self.canvas.draw_square(
+        //     Vec2::new(0.0, 0.0),
+        //     Vec2::new((WIDTH / 2) as f32, HEIGHT as f32),
+        // );
+        // self.canvas.buffer.fill(0);
+        // self.canvas.dim(1);
+        self.canvas.random();
         self.wanderers.iter().for_each(|w| w.draw(&mut self.canvas));
 
         if RECORD {
@@ -133,7 +139,7 @@ impl Sketch {
             .iter()
             .map(hex_to_rgb)
             .collect();
-        //palette.extend([[0, 0, 0, 0]].repeat(1));
+        palette.extend([[0, 0, 0, 0]].repeat(1));
         Canvas::new(palette)
     }
 
@@ -157,10 +163,16 @@ impl Sketch {
     }
 }
 
+enum BlendMode {
+    Replace,
+    Blend,
+}
+
 struct Canvas {
     pub buffer: Vec<u8>,
     palette: Vec<[u8; 4]>,
     pen_color: [u8; 4],
+    blend_mode: BlendMode,
 }
 
 impl Canvas {
@@ -175,6 +187,7 @@ impl Canvas {
             buffer,
             palette,
             pen_color,
+            blend_mode: BlendMode::Blend,
         }
     }
 
@@ -206,17 +219,16 @@ impl Canvas {
     }
 
     fn random(&mut self) {
-        for pixel in self.buffer.as_mut_slice().chunks_exact_mut(4) {
-            let change = self.palette[fastrand::usize(0..self.palette.len())];
-            pixel[0] = change[0];
-            pixel[1] = change[1];
-            pixel[2] = change[2];
-            pixel[3] = change[3];
+        for i in 0..self.buffer.len()/4 {
+            let mut change = self.palette[fastrand::usize(0..self.palette.len())];
+            change[3] = (change[3] as f32 * 0.05) as u8;
+            self.pen_color = change;
+            self.point_blend(i*4);
         }
     }
 
     fn draw_curve(&mut self, start: Vec2, control: Vec2, end: Vec2) {
-        let points = start.distance(control) + control.distance(end);
+        let points = start.distance(control) + control.distance(end) + end.distance(start);
         for i in 1..points as usize {
             let proportion = i as f32 / points;
             let path1 = control - start;
@@ -259,12 +271,46 @@ impl Canvas {
         }
     }
 
+    fn draw_square(&mut self, top_left: Vec2, bottom_right: Vec2) {
+        for offset_x in top_left.x as usize..=bottom_right.x as usize {
+            for offset_y in top_left.y as usize..=bottom_right.y as usize {
+                self.draw_point(Vec2::new(offset_x as f32, offset_y as f32));
+            }
+        }
+    }
+
     fn draw_point(&mut self, pos: Vec2) {
         let buffer_idx = self.idx(pos.x as usize, pos.y as usize);
         if (buffer_idx + 3) > self.buffer.len() {
             // TODO err?
             return;
         }
+        match self.blend_mode {
+            BlendMode::Replace => self.point_replace(buffer_idx),
+            BlendMode::Blend => self.point_blend(buffer_idx),
+        }
+    }
+
+    fn point_blend(&mut self, buffer_idx: usize) {
+        let [r, g, b, a] = self.pen_color;
+
+        if a == 0 { return; } else if a == 255 { self.point_replace(buffer_idx); return; }
+
+        let mix = a as f32 / 255.0;
+        let [dst_r, dst_g, dst_b, dst_a] = [
+            self.buffer[buffer_idx] as f32,
+            self.buffer[buffer_idx + 1] as f32,
+            self.buffer[buffer_idx + 2] as f32,
+            self.buffer[buffer_idx + 3] as f32,
+        ];
+
+        self.buffer[buffer_idx] = ((r as f32 * mix) + (dst_r * (1.0 - mix))) as u8;
+        self.buffer[buffer_idx] = ((g as f32 * mix) + (dst_g * (1.0 - mix))) as u8;
+        self.buffer[buffer_idx] = ((b as f32 * mix) + (dst_b * (1.0 - mix))) as u8;
+        self.buffer[buffer_idx] = ((a as f32 * mix) + (dst_a * (1.0 - mix))) as u8;
+    }
+
+    fn point_replace(&mut self, buffer_idx: usize) {
         self.buffer[buffer_idx] = self.pen_color[0];
         self.buffer[buffer_idx + 1] = self.pen_color[1];
         self.buffer[buffer_idx + 2] = self.pen_color[2];
