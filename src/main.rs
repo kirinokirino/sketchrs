@@ -19,6 +19,7 @@ struct Wanderer {
     acc: Vec2,
 
     history: Vec<Vec2>,
+    lifetime: u32,
 }
 
 impl Wanderer {
@@ -31,19 +32,33 @@ impl Wanderer {
             vel,
             acc,
             history,
+            lifetime: 0,
         }
     }
 
-    pub fn update(&mut self) {
-        self.acc = Vec2::new(fastrand::f32() * 4. - 2., fastrand::f32() * 4. - 2.);
+    pub fn reset(&mut self) {
+        self.pos = Vec2::new(320.0, 240.0);
+        self.vel = Vec2::ZERO;
+        self.acc = Vec2::ZERO;
+        self.history.clear();
+    }
 
-        self.history.push(self.pos);
+    pub fn update(&mut self) {
+        self.acc = Vec2::new(fastrand::f32() * 1. - 0.5, fastrand::f32() * 1. - 0.52);
+
+        if self.lifetime % 1 == 0 {
+            self.history.push(self.pos);
+        }
         self.pos += self.vel;
         self.vel += self.acc;
 
-        self.stay_on_canvas();
+        //self.stay_on_canvas();
+        if self.pos.distance(Vec2::new(320.0, 240.0)) > 640.0 {
+            self.reset();
+        }
 
         self.acc = Vec2::new(0.0, 0.0);
+        self.lifetime += 1;
     }
 
     fn stay_on_canvas(&mut self) {
@@ -60,20 +75,12 @@ impl Wanderer {
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        canvas.select_color(0);
-        for past in &self.history {
-            canvas.draw_point(*past);
-        }
+        // for past in &self.history {
+        //     canvas.draw_point(*past);
+        // }
         let history = self.history.as_slice().windows(3).rev();
-        for w in history.clone().take(10) {
-            canvas.draw_curve(w[0], w[1], w[2]);
-        }
-        canvas.select_color(1);
-        for w in history.clone().skip(10).take(10) {
-            canvas.draw_curve(w[0], w[1], w[2]);
-        }
-        canvas.select_color(3);
-        for w in history.clone().skip(20).take(10) {
+        for (i, w) in history.clone().take(10).enumerate() {
+            canvas.select_color((i % 5) as u8);
             canvas.draw_curve(w[0], w[1], w[2]);
         }
     }
@@ -90,24 +97,25 @@ impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        let wanderer = Wanderer::new(Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32));
-        let mut wanderers = Vec::new();
-        for _ in 0..6 {
-            wanderers.push(wanderer.clone());
-        }
-        wanderers.push(wanderer);
         Self {
             canvas,
             ffmpeg,
-            wanderers,
+            wanderers: Vec::new(),
         }
     }
 
     pub fn run(&mut self) {
+        let mut cycle = 0;
+        let wanderer = Wanderer::new(Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32));
+
         loop {
+            if cycle < 100 {
+                self.wanderers.push(wanderer.clone());
+            }
             self.update();
             self.draw();
             std::thread::sleep(std::time::Duration::from_millis(30));
+            cycle += 1;
         }
     }
 
@@ -121,9 +129,9 @@ impl Sketch {
         //     Vec2::new(0.0, 0.0),
         //     Vec2::new((WIDTH / 2) as f32, HEIGHT as f32),
         // );
-        // self.canvas.buffer.fill(0);
-        // self.canvas.dim(1);
-        self.canvas.random();
+        self.canvas.buffer.fill(0);
+        //self.canvas.dim(10);
+        //self.canvas.random();
         self.wanderers.iter().for_each(|w| w.draw(&mut self.canvas));
 
         if RECORD {
@@ -187,7 +195,7 @@ impl Canvas {
             buffer,
             palette,
             pen_color,
-            blend_mode: BlendMode::Blend,
+            blend_mode: BlendMode::Replace,
         }
     }
 
@@ -219,11 +227,11 @@ impl Canvas {
     }
 
     fn random(&mut self) {
-        for i in 0..self.buffer.len()/4 {
+        for i in 0..self.buffer.len() / 4 {
             let mut change = self.palette[fastrand::usize(0..self.palette.len())];
             change[3] = (change[3] as f32 * 0.05) as u8;
             self.pen_color = change;
-            self.point_blend(i*4);
+            self.point_blend(i * 4);
         }
     }
 
@@ -280,11 +288,14 @@ impl Canvas {
     }
 
     fn draw_point(&mut self, pos: Vec2) {
-        let buffer_idx = self.idx(pos.x as usize, pos.y as usize);
-        if (buffer_idx + 3) > self.buffer.len() {
-            // TODO err?
+        if pos.x >= 640.0 || pos.x < 0.0 || pos.y >= 480.0 || pos.y < 0.0 {
             return;
         }
+        let buffer_idx = self.idx(pos.x as usize, pos.y as usize);
+        // if (buffer_idx + 3) > self.buffer.len() {
+        //     // TODO err?
+        //     return;
+        // }
         match self.blend_mode {
             BlendMode::Replace => self.point_replace(buffer_idx),
             BlendMode::Blend => self.point_blend(buffer_idx),
@@ -294,7 +305,12 @@ impl Canvas {
     fn point_blend(&mut self, buffer_idx: usize) {
         let [r, g, b, a] = self.pen_color;
 
-        if a == 0 { return; } else if a == 255 { self.point_replace(buffer_idx); return; }
+        if a == 0 {
+            return;
+        } else if a == 255 {
+            self.point_replace(buffer_idx);
+            return;
+        }
 
         let mix = a as f32 / 255.0;
         let [dst_r, dst_g, dst_b, dst_a] = [
