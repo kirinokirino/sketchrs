@@ -1,9 +1,14 @@
+use std::f32::consts::TAU;
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
 
-const RECORD: bool = false;
+const RECORD: bool = true;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
+const PALETTE: [&'static str; 10] = [
+    "#c76e86", "#9c2940", "#761831", "#420424", "#090b19", "#091633", "#14213e", "#24454c",
+    "#316264", "#407b70",
+];
 
 use glam::Vec2;
 
@@ -11,77 +16,44 @@ fn main() {
     let mut sketch = Sketch::new();
     sketch.run();
 }
-
-#[derive(Debug, Clone)]
-struct Wanderer {
-    pos: Vec2,
-    vel: Vec2,
-    acc: Vec2,
-
-    history: Vec<Vec2>,
-    lifetime: u32,
+struct Cloud {
+    points: Vec<Vec2>,
 }
 
-impl Wanderer {
-    pub fn new(pos: Vec2) -> Self {
-        let vel = Vec2::new(0.0, 0.0);
-        let acc = Vec2::new(0.0, 0.0);
-        let history = Vec::new();
-        Self {
-            pos,
-            vel,
-            acc,
-            history,
-            lifetime: 0,
+impl Cloud {
+    pub fn new(pos: Vec2, size: Vec2) -> Self {
+        let randomness = 0.5;
+        let max_points = 1000;
+        let angle_step = TAU / max_points as f32;
+        let mut points = Vec::with_capacity(max_points);
+        for i in 0..max_points {
+            let rotation = Vec2::from_angle(angle_step * i as f32);
+            let point = Vec2::ONE.rotate(rotation);
+            let point_scaled = point * size + pos;
+            let point_randomized = point_scaled
+                + point_scaled
+                    * Vec2::new(fastrand::f32() * randomness, fastrand::f32() * randomness);
+            points.push(point_randomized);
         }
+        Self { points }
     }
 
-    pub fn reset(&mut self) {
-        self.pos = Vec2::new(320.0, 240.0);
-        self.vel = Vec2::ZERO;
-        self.acc = Vec2::ZERO;
-        self.history.clear();
+    pub fn draw(&self, offset: u32, canvas: &mut Canvas) {
+        let offset_max = 30;
+        for (i, w) in self.points.as_slice().windows(6 + offset_max).enumerate() {
+            let offset = (offset as usize % offset_max) as usize;
+            if (i % offset_max) != offset {
+                continue;
+            }
+            let color = ((self.points[0].y / 480.0) * PALETTE.len() as f32) as u8;
+            canvas.select_color(color);
+            canvas.draw_curve(w[0 + offset], w[2 + offset], w[4 + offset]);
+        }
     }
 
     pub fn update(&mut self) {
-        self.acc = Vec2::new(fastrand::f32() * 1. - 0.5, fastrand::f32() * 1. - 0.52);
-
-        if self.lifetime % 1 == 0 {
-            self.history.push(self.pos);
-        }
-        self.pos += self.vel;
-        self.vel += self.acc;
-
-        //self.stay_on_canvas();
-        if self.pos.distance(Vec2::new(320.0, 240.0)) > 640.0 {
-            self.reset();
-        }
-
-        self.acc = Vec2::new(0.0, 0.0);
-        self.lifetime += 1;
-    }
-
-    fn stay_on_canvas(&mut self) {
-        if self.pos.x <= 0.0 {
-            self.pos.x = WIDTH as f32;
-        } else if self.pos.x >= WIDTH as f32 {
-            self.pos.x = 0.0;
-        }
-        if self.pos.y <= 0.0 {
-            self.pos.y = HEIGHT as f32;
-        } else if self.pos.y >= HEIGHT as f32 {
-            self.pos.y = 0.0;
-        }
-    }
-
-    pub fn draw(&self, canvas: &mut Canvas) {
-        // for past in &self.history {
-        //     canvas.draw_point(*past);
-        // }
-        let history = self.history.as_slice().windows(3).rev();
-        for (i, w) in history.clone().take(10).enumerate() {
-            canvas.select_color((i % 5) as u8);
-            canvas.draw_curve(w[0], w[1], w[2]);
+        for point in &mut self.points {
+            *point += Vec2::new((fastrand::f32() - 0.5) * 6.0, (fastrand::f32() - 0.5) * 6.0);
         }
     }
 }
@@ -90,49 +62,60 @@ struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
 
-    wanderers: Vec<Wanderer>,
+    clouds: Vec<Cloud>,
+    cycle: u32,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
+        let mut clouds = Vec::new();
+        let size: f32 = 40.0;
+        for _ in 0..40 {
+            let pos = Vec2::new(fastrand::f32() * 640.0, -fastrand::f32() * 240.0 + 240.0);
+            let size = Vec2::new(
+                fastrand::f32() * size + size * 0.3,
+                fastrand::f32() / 3.0 * size + size * 0.3,
+            );
+            clouds.push(Cloud::new(pos, size));
+        }
         Self {
             canvas,
             ffmpeg,
-            wanderers: Vec::new(),
+            clouds,
+            cycle: 0,
         }
     }
 
     pub fn run(&mut self) {
-        let mut cycle = 0;
-        let wanderer = Wanderer::new(Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32));
-
         loop {
-            if cycle < 100 {
-                self.wanderers.push(wanderer.clone());
-            }
             self.update();
             self.draw();
             std::thread::sleep(std::time::Duration::from_millis(30));
-            cycle += 1;
+            self.cycle += 1;
         }
     }
 
     fn update(&mut self) {
-        self.wanderers.iter_mut().for_each(|w| w.update());
+        self.clouds.iter_mut().for_each(|cloud| cloud.update());
     }
 
     fn draw(&mut self) {
-        //self.canvas.select_color(1);
-        // self.canvas.draw_square(
-        //     Vec2::new(0.0, 0.0),
-        //     Vec2::new((WIDTH / 2) as f32, HEIGHT as f32),
-        // );
-        self.canvas.buffer.fill(0);
-        //self.canvas.dim(10);
+        self.canvas.blend_mode = BlendMode::Blend;
+        self.canvas.pen_color = hex_to_rgb(&PALETTE[PALETTE.len() - 1]);
+        self.canvas.pen_color[3] = 20;
+        self.canvas.draw_square(
+            Vec2::new(0.0, 0.0),
+            Vec2::new((WIDTH) as f32, HEIGHT as f32),
+        );
+        self.canvas.blend_mode = BlendMode::Replace;
+        // self.canvas.buffer.fill(0);
+        self.canvas.dim(10);
         //self.canvas.random();
-        self.wanderers.iter().for_each(|w| w.draw(&mut self.canvas));
+        self.clouds
+            .iter()
+            .for_each(|cloud| cloud.draw(self.cycle, &mut self.canvas));
 
         if RECORD {
             self.ffmpeg
@@ -143,10 +126,7 @@ impl Sketch {
     }
 
     fn canvas() -> Canvas {
-        let mut palette: Vec<_> = ["#df8c00", "#d7ac64", "#36241e", "#4a3d35", "#747769"]
-            .iter()
-            .map(hex_to_rgb)
-            .collect();
+        let mut palette: Vec<_> = PALETTE.iter().map(hex_to_rgb).collect();
         palette.extend([[0, 0, 0, 0]].repeat(1));
         Canvas::new(palette)
     }
@@ -179,7 +159,7 @@ enum BlendMode {
 struct Canvas {
     pub buffer: Vec<u8>,
     palette: Vec<[u8; 4]>,
-    pen_color: [u8; 4],
+    pub pen_color: [u8; 4],
     blend_mode: BlendMode,
 }
 
@@ -321,9 +301,9 @@ impl Canvas {
         ];
 
         self.buffer[buffer_idx] = ((r as f32 * mix) + (dst_r * (1.0 - mix))) as u8;
-        self.buffer[buffer_idx] = ((g as f32 * mix) + (dst_g * (1.0 - mix))) as u8;
-        self.buffer[buffer_idx] = ((b as f32 * mix) + (dst_b * (1.0 - mix))) as u8;
-        self.buffer[buffer_idx] = ((a as f32 * mix) + (dst_a * (1.0 - mix))) as u8;
+        self.buffer[buffer_idx + 1] = ((g as f32 * mix) + (dst_g * (1.0 - mix))) as u8;
+        self.buffer[buffer_idx + 2] = ((b as f32 * mix) + (dst_b * (1.0 - mix))) as u8;
+        self.buffer[buffer_idx + 3] = ((a as f32 * mix) + (dst_a * (1.0 - mix))) as u8;
     }
 
     fn point_replace(&mut self, buffer_idx: usize) {
