@@ -1,14 +1,22 @@
+use image::io::Reader as ImageReader;
+use image::{Pixel, Rgba, RgbaImage};
 use std::f32::consts::TAU;
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
 
-const RECORD: bool = true;
+const RECORD: bool = false;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const PALETTE: [&'static str; 10] = [
-    "#c76e86", "#9c2940", "#761831", "#420424", "#090b19", "#091633", "#14213e", "#24454c",
-    "#316264", "#407b70",
+const PALETTE: [&'static str; 32] = [
+    "#6074ab", "#6b9acf", "#8bbde6", "#aae0f3", "#c8eded", "#faffe0", "#dde6e0", "#b4bec2",
+    "#949da8", "#7a7a99", "#5b5280", "#4e3161", "#421e42", "#612447", "#7a3757", "#96485b",
+    "#bd6868", "#d18b79", "#dbac8c", "#e6cfa1", "#e7ebbc", "#b2dba0", "#87c293", "#70a18f",
+    "#637c8f", "#b56e75", "#c98f8f", "#dfb6ae", "#edd5ca", "#bd7182", "#9e5476", "#753c6a",
 ];
+
+const SCALE: usize = 40;
+const CELLS_WIDTH: usize = WIDTH / SCALE;
+const CELLS_HEIGHT: usize = HEIGHT / SCALE;
 
 use glam::Vec2;
 
@@ -16,45 +24,106 @@ fn main() {
     let mut sketch = Sketch::new();
     sketch.run();
 }
-struct Cloud {
-    points: Vec<Vec2>,
+
+#[derive(Clone)]
+struct Cell {
+    pos: Vec2,
+    color: [u8; 4],
 }
 
-impl Cloud {
-    pub fn new(pos: Vec2, size: Vec2) -> Self {
-        let randomness = 0.5;
-        let max_points = 1000;
-        let angle_step = TAU / max_points as f32;
-        let mut points = Vec::with_capacity(max_points);
-        for i in 0..max_points {
-            let rotation = Vec2::from_angle(angle_step * i as f32);
-            let point = Vec2::ONE.rotate(rotation);
-            let point_scaled = point * size + pos;
-            let point_randomized = point_scaled
-                + point_scaled
-                    * Vec2::new(fastrand::f32() * randomness, fastrand::f32() * randomness);
-            points.push(point_randomized);
-        }
-        Self { points }
+impl Cell {
+    pub fn new(pos: Vec2, color: [u8; 4]) -> Self {
+        Self { pos, color }
     }
 
     pub fn draw(&self, offset: u32, canvas: &mut Canvas) {
-        let offset_max = 30;
-        for (i, w) in self.points.as_slice().windows(6 + offset_max).enumerate() {
-            let offset = (offset as usize % offset_max) as usize;
-            if (i % offset_max) != offset {
-                continue;
-            }
-            let color = ((self.points[0].y / 480.0) * PALETTE.len() as f32) as u8;
-            canvas.select_color(color);
-            canvas.draw_curve(w[0 + offset], w[2 + offset], w[4 + offset]);
-        }
+        //
     }
 
     pub fn update(&mut self) {
-        for point in &mut self.points {
-            *point += Vec2::new((fastrand::f32() - 0.5) * 6.0, (fastrand::f32() - 0.5) * 6.0);
+        self.pos += Vec2::new(fastrand::f32() - 0.5, fastrand::f32() - 0.5);
+    }
+}
+
+struct Cells {
+    grid: [[Vec<Cell>; CELLS_WIDTH]; CELLS_HEIGHT],
+    len: usize,
+}
+
+impl Cells {
+    pub fn new() -> Self {
+        let mut grid: [[std::mem::MaybeUninit<Vec<Cell>>; CELLS_WIDTH]; CELLS_HEIGHT] =
+            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        for y in 0..CELLS_HEIGHT {
+            for x in 0..CELLS_WIDTH {
+                grid[y][x] = std::mem::MaybeUninit::new(vec![Cell::new(
+                    Vec2::new(
+                        x as f32 * (SCALE as f32) + (SCALE as f32) / 2.0,
+                        y as f32 * (SCALE as f32) + (SCALE as f32) / 2.0,
+                    ),
+                    [0, 0, 0, 0], //[0, 181, 226, 255],
+                )]);
+            }
         }
+        let len = CELLS_WIDTH * CELLS_HEIGHT;
+        Self {
+            grid: unsafe {
+                std::mem::transmute::<_, [[Vec<Cell>; CELLS_WIDTH]; CELLS_HEIGHT]>(grid)
+            },
+            len,
+        }
+    }
+
+    pub fn push(&mut self, cell: Cell) {
+        let pos = cell.pos;
+        let x = (pos.x / (SCALE as f32)) as usize;
+        let y = (pos.y / (SCALE as f32)) as usize;
+        let other = self.closest(pos);
+        if other.pos.distance(pos) < 1.5 {
+            self.closest_brighten(pos, cell.color);
+        } else {
+            self.grid[y][x].push(cell);
+            self.len += 1;
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn closest_brighten(&mut self, pos: Vec2, color: [u8; 4]) {
+        let cells =
+            &mut self.grid[(pos.y / (SCALE as f32)) as usize][(pos.x / (SCALE as f32)) as usize];
+        let mut closest = &mut cells[0].clone();
+        let mut closest_distance = 9999f32;
+
+        for (_i, cell) in cells.iter_mut().enumerate() {
+            let dist = cell.pos.distance(pos);
+            if dist < closest_distance {
+                closest_distance = dist;
+                closest = cell;
+            }
+        }
+        let c = &mut closest.color;
+        c[0] = (c[0].max(color[0]) as u16 + 1) as u8;
+        c[1] = (c[1].max(color[1]) as u16 + 1) as u8;
+        c[2] = (c[2].max(color[2]) as u16 + 1) as u8;
+    }
+
+    pub fn closest(&self, pos: Vec2) -> &Cell {
+        let cells =
+            &self.grid[(pos.y / (SCALE as f32)) as usize][(pos.x / (SCALE as f32)) as usize];
+        let mut closest = &cells[0];
+        let mut closest_distance = 9999f32;
+
+        for cell in cells.iter() {
+            let dist = cell.pos.distance(pos);
+            if dist < closest_distance {
+                closest_distance = dist;
+                closest = cell;
+            }
+        }
+        closest
     }
 }
 
@@ -62,29 +131,42 @@ struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
 
-    clouds: Vec<Cloud>,
+    cells: Cells,
+    castle: Vec<(Vec2, u8)>,
     cycle: u32,
+    max_brightness: u8,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        let mut clouds = Vec::new();
-        let size: f32 = 40.0;
-        for _ in 0..40 {
-            let pos = Vec2::new(fastrand::f32() * 640.0, -fastrand::f32() * 240.0 + 240.0);
-            let size = Vec2::new(
-                fastrand::f32() * size + size * 0.3,
-                fastrand::f32() / 3.0 * size + size * 0.3,
-            );
-            clouds.push(Cloud::new(pos, size));
+        let mut cells = Cells::new();
+        let img: image::ImageBuffer<Rgba<u8>, Vec<u8>> = ImageReader::open("assets/castle.png")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+        let mut castle = Vec::new();
+        let mut max_brightness = 0;
+        for (x, y, pixel) in img.enumerate_pixels() {
+            if pixel.0[3] > 10 {
+                let c = pixel.channels();
+                let unred = 255 - c[0];
+                castle.push((Vec2::new(x as f32, y as f32), unred));
+                if unred > max_brightness {
+                    max_brightness = unred;
+                }
+            }
         }
+
         Self {
             canvas,
             ffmpeg,
-            clouds,
+            cells,
+            castle,
             cycle: 0,
+            max_brightness,
         }
     }
 
@@ -98,24 +180,55 @@ impl Sketch {
     }
 
     fn update(&mut self) {
-        self.clouds.iter_mut().for_each(|cloud| cloud.update());
+        //self.cells.iter_mut().for_each(|cloud| cloud.update());
+        if self.cells.len() > 100000 {
+            return;
+        }
+        for i in 0..32 * 4 {
+            let (pos, brightness) = self.castle[fastrand::usize(..self.castle.len())];
+            let color = self.canvas.palette[i / 4];
+            let dim: f32 = brightness as f32 / self.max_brightness as f32;
+            let new_color = [
+                (color[0] as f32 * dim) as u8,
+                (color[1] as f32 * dim) as u8,
+                (color[2] as f32 * dim) as u8,
+                color[3],
+            ];
+            self.cells.push(Cell::new(pos, new_color));
+        }
     }
 
     fn draw(&mut self) {
-        self.canvas.blend_mode = BlendMode::Blend;
-        self.canvas.pen_color = hex_to_rgb(&PALETTE[PALETTE.len() - 1]);
-        self.canvas.pen_color[3] = 20;
-        self.canvas.draw_square(
-            Vec2::new(0.0, 0.0),
-            Vec2::new((WIDTH) as f32, HEIGHT as f32),
-        );
-        self.canvas.blend_mode = BlendMode::Replace;
+        // self.canvas.blend_mode = BlendMode::Blend;
+        // self.canvas.pen_color = hex_to_rgb(&PALETTE[PALETTE.len() - 1]);
+        // self.canvas.pen_color[3] = 20;
+        // self.canvas.draw_square(
+        //     Vec2::new(0.0, 0.0),
+        //     Vec2::new((WIDTH) as f32, HEIGHT as f32),
+        // );
+        // self.canvas.blend_mode = BlendMode::Replace;
         // self.canvas.buffer.fill(0);
-        self.canvas.dim(10);
+        // self.canvas.dim(10);
         //self.canvas.random();
-        self.clouds
-            .iter()
-            .for_each(|cloud| cloud.draw(self.cycle, &mut self.canvas));
+        for (i, pixel) in self
+            .canvas
+            .buffer
+            .as_mut_slice()
+            .chunks_exact_mut(4)
+            .enumerate()
+        {
+            let x = i % 640;
+            let y = i / 640;
+            let pix_pos = Vec2::new(x as f32, y as f32);
+
+            let closest = self.cells.closest(pix_pos);
+            let dist = closest.pos.distance(pix_pos);
+            let c = closest.color;
+            pixel[0] = c[0]; //(self.cells[closest].color[0] as f32 * (closest_distance / 50.0)) as u8;
+            pixel[1] = c[1]; //(self.cells[closest].color[1] as f32 * (closest_distance / 50.0)) as u8;
+            pixel[2] = c[2]; //(self.cells[closest].color[2] as f32 * (closest_distance / 50.0)) as u8;
+            pixel[3] = c[3]; //((SCALE as f32 - dist) * (255.0 / SCALE as f32)) as u8;
+        }
 
         if RECORD {
             self.ffmpeg
