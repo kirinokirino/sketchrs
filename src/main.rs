@@ -1,3 +1,6 @@
+use image::io::Reader as ImageReader;
+use image::{Pixel, Rgba, RgbaImage};
+
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
@@ -5,12 +8,7 @@ use std::process::{ChildStdin, Command, Stdio};
 const RECORD: bool = false;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const PALETTE: [&'static str; 32] = [
-    "#6074ab", "#6b9acf", "#8bbde6", "#aae0f3", "#c8eded", "#faffe0", "#dde6e0", "#b4bec2",
-    "#949da8", "#7a7a99", "#5b5280", "#4e3161", "#421e42", "#612447", "#7a3757", "#96485b",
-    "#bd6868", "#d18b79", "#dbac8c", "#e6cfa1", "#e7ebbc", "#b2dba0", "#87c293", "#70a18f",
-    "#637c8f", "#b56e75", "#c98f8f", "#dfb6ae", "#edd5ca", "#bd7182", "#9e5476", "#753c6a",
-];
+const PALETTE: [&'static str; 5] = ["#160729", "#171856", "#243771", "#416e8f", "#dbf3f1"];
 use glam::Vec2;
 
 fn main() {
@@ -18,66 +16,140 @@ fn main() {
     sketch.run();
 }
 
-const CELL_SIZE: f32 = 3.0;
-
-struct Piece {
-    angle: f32,
+struct Snowflake {
     pos: Vec2,
-    pub offset: f32,
+    vel: Vec2,
+    acc: Vec2,
+
+    angle: f32,
+    size: f32,
+    lifetime: usize,
+    rays: usize,
+    color: u8,
 }
 
-impl Piece {
-    fn new(angle: f32, pos: Vec2, offset: f32) -> Self {
-        Self { angle, pos, offset }
+impl Snowflake {
+    fn new(pos: Vec2, vel: Vec2, angle: f32) -> Self {
+        let size = fastrand::f32() * 30.0 + 10.0;
+
+        Self {
+            angle,
+            pos,
+            vel,
+            acc: Vec2::ZERO,
+            size,
+            lifetime: 0,
+            rays: fastrand::usize(4..12),
+            color: fastrand::u8(0..5),
+        }
+    }
+
+    pub fn update(&mut self) {
+        self.acc = Vec2::new(fastrand::f32() - 0.5 * 1.0, fastrand::f32() * 1.0);
+        self.vel += self.acc;
+        self.vel *= 0.92;
+        self.pos += self.vel;
+
+        self.acc = Vec2::ZERO;
+        self.lifetime += 1;
+        self.angle += (fastrand::f32()-0.5) * 0.4;
+
+        self.check_boundaries();
+    }
+
+    pub fn check_boundaries(&mut self) {
+        if self.pos.x >= self.size + WIDTH as f32 {
+            self.pos.x = -self.size;
+        }
+        if self.pos.x < -self.size {
+            self.pos.x = WIDTH as f32 + self.size;
+        }
+        if self.pos.y >= self.size + HEIGHT as f32 {
+            self.pos.y = -self.size;
+        }
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        let color = map(
-            self.pos.length_squared(),
-            0.0,
-            Vec2::new(WIDTH as f32, HEIGHT as f32).length_squared(),
-            0.0,
-            PALETTE.len() as f32,
-        );
-        canvas.select_color(color as u8);
-        canvas.draw_arc(
-            self.pos,
-            CELL_SIZE / 2.0,
-            self.angle / 2.0,
-            -FRAC_PI_2 + self.angle / 2.0 + self.offset,
-        );
-        // canvas.draw_point(self.pos);
+        // let color = map(
+        //     self.pos.length_squared(),
+        //     0.0,
+        //     Vec2::new(WIDTH as f32, HEIGHT as f32).length_squared(),
+        //     0.0,
+        //     PALETTE.len() as f32,
+        // );
+        // canvas.select_color(color as u8);
+        // canvas.draw_arc(
+        //     self.pos,
+        //     CELL_SIZE / 2.0,
+        //     self.angle / 2.0,
+        //     -FRAC_PI_2 + self.angle / 2.0,
+        // );
+        canvas.select_color(self.color);
+        let size = self.size / 2.0 + (self.lifetime as f32 / 60.0).sin() * self.size * 0.1;
+        self.draw_flake(canvas, self.pos, size);
+    }
+
+    fn draw_flake(&self, canvas: &mut Canvas, pos: Vec2, size: f32) {
+        let step = TAU / self.rays as f32;
+        for ray in 0..self.rays {
+            let angle = self.angle + step * ray as f32;
+            let delta = Vec2::from_angle(angle) * size;
+            canvas.draw_line(pos, pos + delta);
+        }
     }
 }
 
+type Color = [u8; 4];
 struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
     cycle: usize,
-    pieces: Vec<Piece>,
+    snowflakes: Vec<Snowflake>,
+    santa: Vec<(Vec2, Color)>,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        let mut pieces = Vec::new();
+        let mut snowflakes = Vec::new();
 
-        for y in 0..=HEIGHT / CELL_SIZE as usize {
-            for x in 0..=WIDTH / CELL_SIZE as usize {
-                let pos = Vec2::new(x as f32 * CELL_SIZE, y as f32 * CELL_SIZE);
-                let angle = fastrand::i32(2..=4) as f32 * FRAC_PI_2;
-                let offset = (x as f32 / (WIDTH as f32 / CELL_SIZE) * PI)
-                    + (y as f32 / (HEIGHT as f32 / CELL_SIZE) * PI);
-                pieces.push(Piece::new(angle, pos, offset));
+        for x in 0..=fastrand::usize(50..100) {
+            let pos = Vec2::new(
+                fastrand::f32() * WIDTH as f32,
+                fastrand::f32() * -(HEIGHT as f32) - 100.0,
+            );
+            let angle = fastrand::f32() * TAU;
+            snowflakes.push(Snowflake::new(
+                pos,
+                Vec2::new(0.0, (fastrand::f32() - 0.5) * 5.0),
+                angle,
+            ));
+        }
+
+        let img: image::ImageBuffer<Rgba<u8>, Vec<u8>> = ImageReader::open("assets/santa.png")
+            .unwrap()
+            .decode()
+            .unwrap()
+            .into_rgba8();
+        let mut santa = Vec::new();
+        for (x, y, pixel) in img.enumerate_pixels() {
+            if pixel.0[3] > 10 {
+                let c = pixel.channels();
+                santa.push((
+                    Vec2::new(x as f32 * 6.0, y as f32 * 6.0),
+                    [c[0], c[1], c[2], c[3]],
+                ));
             }
         }
-        println!("{}", pieces.len());
+
+        println!("{}", snowflakes.len());
         Self {
             canvas,
             ffmpeg,
             cycle: 0,
-            pieces,
+            snowflakes,
+            santa,
         }
     }
 
@@ -91,7 +163,7 @@ impl Sketch {
     }
 
     fn update(&mut self) {
-        self.pieces.iter_mut().for_each(|piece| piece.offset += 0.1);
+        self.snowflakes.iter_mut().for_each(|piece| piece.update());
     }
 
     fn draw(&mut self) {
@@ -106,9 +178,15 @@ impl Sketch {
         self.canvas.buffer.fill(0);
         // self.canvas.dim(10);
         //self.canvas.random();
-        self.pieces
+        self.snowflakes
             .iter()
             .for_each(|piece| piece.draw(&mut self.canvas));
+
+        for (pos, c) in &self.santa {
+            self.canvas.pen_color = *c;
+            self.canvas
+                .draw_point(*pos + Vec2::new(WIDTH as f32 / 4.0, 20.0));
+        }
 
         if RECORD {
             self.ffmpeg
