@@ -1,169 +1,213 @@
-use image::io::Reader as ImageReader;
-use image::{Pixel, Rgba, RgbaImage};
+use glam::Vec2;
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
 
-const RECORD: bool = false;
+const RECORD: bool = true;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const PALETTE: [&'static str; 5] = ["#160729", "#171856", "#243771", "#416e8f", "#dbf3f1"];
-use glam::Vec2;
+const PALETTE: [&'static str; 10] = [
+    "#de9f47", "#fdd179", "#fee1b8", "#d4c692", "#a6b04f", "#819447", "#44702d", "#2f4d2f",
+    "#546756", "#89a477",
+];
 
 fn main() {
     let mut sketch = Sketch::new();
     sketch.run();
 }
 
-struct Snowflake {
+#[derive(Debug)]
+struct ConnectedNode {
+    self_id: usize,
+    connections: Vec<usize>,
+
+    pos: Vec2,
+}
+
+impl ConnectedNode {
+    fn new(self_id: usize, pos: Vec2) -> Self {
+        Self {
+            self_id,
+            connections: Vec::new(),
+            pos,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Nodes {
+    nodes: Vec<ConnectedNode>,
+
+    selected_node: usize,
+}
+
+impl Nodes {
+    pub fn new(starting_node: Vec2) -> Self {
+        let nodes = vec![ConnectedNode::new(0, starting_node)];
+        Self {
+            nodes,
+            selected_node: 0,
+        }
+    }
+
+    pub fn append(&mut self, pos: Vec2) {
+        let connected = self.selected_node;
+        let mut node = ConnectedNode::new(self.nodes.len(), pos);
+        self.selected_node = self.nodes.len();
+        node.connections.push(connected);
+        self.nodes.push(node);
+    }
+
+    pub fn draw(&self, canvas: &mut Canvas) {
+        for node in &self.nodes {
+            for other in &node.connections {
+                let other_node = &self.nodes[*other];
+                let (lower, upper) = sort_y(node.pos, other_node.pos);
+                canvas.fluffy_line(lower, upper);
+            }
+        }
+    }
+}
+
+fn sort_y(a: Vec2, b: Vec2) -> (Vec2, Vec2) {
+    if a.y > b.y {
+        (b, a)
+    } else {
+        (a, b)
+    }
+}
+
+#[derive(Debug)]
+struct GrowAgent {
     pos: Vec2,
     vel: Vec2,
     acc: Vec2,
-
-    angle: f32,
-    size: f32,
-    lifetime: usize,
-    rays: usize,
-    color: u8,
 }
 
-impl Snowflake {
-    fn new(pos: Vec2, vel: Vec2, angle: f32) -> Self {
-        let size = fastrand::f32() * 30.0 + 10.0;
-
+impl GrowAgent {
+    pub fn new(pos: Vec2, vel: Vec2) -> Self {
         Self {
-            angle,
             pos,
             vel,
             acc: Vec2::ZERO,
-            size,
-            lifetime: 0,
-            rays: fastrand::usize(4..12),
-            color: fastrand::u8(0..5),
         }
     }
 
     pub fn update(&mut self) {
-        self.acc = Vec2::new(fastrand::f32() - 0.5 * 1.0, fastrand::f32() * 1.0);
+        let gravity = Vec2::new(0.0, 1.0);
+        let random =
+            Vec2::new(fastrand::f32() - 0.5, fastrand::f32() - 0.5) * fastrand::f32() * 3.0;
+        self.acc += gravity;
+        self.acc += random;
         self.vel += self.acc;
-        self.vel *= 0.92;
         self.pos += self.vel;
 
         self.acc = Vec2::ZERO;
-        self.lifetime += 1;
-        self.angle += (fastrand::f32()-0.5) * 0.4;
+    }
+}
 
-        self.check_boundaries();
+#[derive(Debug)]
+struct Tree {
+    trunk: Nodes,
+    grow_agent: GrowAgent,
+    force: f32,
+}
+
+impl Tree {
+    fn new() -> Self {
+        let starting_pos = Vec2::new((WIDTH / 2) as f32, HEIGHT as f32);
+        let trunk = Nodes::new(starting_pos);
+        let force = -5.0 + -20.0 * fastrand::f32();
+        let grow_agent = GrowAgent::new(
+            starting_pos,
+            Vec2::new((fastrand::f32() - 0.5) * 5.0, force),
+        );
+
+        Self {
+            trunk,
+            grow_agent,
+            force,
+        }
     }
 
-    pub fn check_boundaries(&mut self) {
-        if self.pos.x >= self.size + WIDTH as f32 {
-            self.pos.x = -self.size;
-        }
-        if self.pos.x < -self.size {
-            self.pos.x = WIDTH as f32 + self.size;
-        }
-        if self.pos.y >= self.size + HEIGHT as f32 {
-            self.pos.y = -self.size;
-        }
+    pub fn update(&mut self) {
+        self.grow();
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        // let color = map(
-        //     self.pos.length_squared(),
-        //     0.0,
-        //     Vec2::new(WIDTH as f32, HEIGHT as f32).length_squared(),
-        //     0.0,
-        //     PALETTE.len() as f32,
-        // );
-        // canvas.select_color(color as u8);
-        // canvas.draw_arc(
-        //     self.pos,
-        //     CELL_SIZE / 2.0,
-        //     self.angle / 2.0,
-        //     -FRAC_PI_2 + self.angle / 2.0,
-        // );
-        canvas.select_color(self.color);
-        let size = self.size / 2.0 + (self.lifetime as f32 / 60.0).sin() * self.size * 0.1;
-        self.draw_flake(canvas, self.pos, size);
+        //canvas.draw_circle(self.grow_agent.pos, 5.0);
+        self.trunk.draw(canvas);
     }
 
-    fn draw_flake(&self, canvas: &mut Canvas, pos: Vec2, size: f32) {
-        let step = TAU / self.rays as f32;
-        for ray in 0..self.rays {
-            let angle = self.angle + step * ray as f32;
-            let delta = Vec2::from_angle(angle) * size;
-            canvas.draw_line(pos, pos + delta);
+    fn grow(&mut self) {
+        let pos = self.grow_agent.pos;
+        self.grow_agent.update();
+        self.trunk.append(pos);
+        self.maybe_start_branch();
+    }
+
+    fn maybe_start_branch(&mut self) {
+        if self.grow_agent.vel.y >= 10.0 {
+            let mut idx = 0;
+            for _ in 0..10 {
+                idx = fastrand::usize(0..self.trunk.nodes.len());
+                if idx < fastrand::usize(0..self.trunk.nodes.len()) {
+                    break;
+                }
+            }
+            let pos = &self.trunk.nodes[idx].pos;
+            self.trunk.selected_node = idx;
+            self.force *= 0.9;
+            let vel = Vec2::new((fastrand::f32() - 0.5) * 10.0, self.force);
+            self.grow_agent.pos = *pos;
+            self.grow_agent.vel = vel;
         }
     }
 }
 
-type Color = [u8; 4];
 struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
     cycle: usize,
-    snowflakes: Vec<Snowflake>,
-    santa: Vec<(Vec2, Color)>,
+    tree: Tree,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        let mut snowflakes = Vec::new();
 
-        for x in 0..=fastrand::usize(50..100) {
-            let pos = Vec2::new(
-                fastrand::f32() * WIDTH as f32,
-                fastrand::f32() * -(HEIGHT as f32) - 100.0,
-            );
-            let angle = fastrand::f32() * TAU;
-            snowflakes.push(Snowflake::new(
-                pos,
-                Vec2::new(0.0, (fastrand::f32() - 0.5) * 5.0),
-                angle,
-            ));
-        }
-
-        let img: image::ImageBuffer<Rgba<u8>, Vec<u8>> = ImageReader::open("assets/santa.png")
-            .unwrap()
-            .decode()
-            .unwrap()
-            .into_rgba8();
-        let mut santa = Vec::new();
-        for (x, y, pixel) in img.enumerate_pixels() {
-            if pixel.0[3] > 10 {
-                let c = pixel.channels();
-                santa.push((
-                    Vec2::new(x as f32 * 6.0, y as f32 * 6.0),
-                    [c[0], c[1], c[2], c[3]],
-                ));
-            }
-        }
-
-        println!("{}", snowflakes.len());
         Self {
             canvas,
             ffmpeg,
             cycle: 0,
-            snowflakes,
-            santa,
+            tree: Tree::new(),
         }
     }
 
     pub fn run(&mut self) {
         loop {
-            self.update();
-            self.draw();
-            std::thread::sleep(std::time::Duration::from_millis(30));
-            self.cycle += 1;
+            loop {
+                self.update();
+                self.draw();
+                //std::thread::sleep(std::time::Duration::from_millis(30));
+                self.cycle += 1;
+                if self.cycle >= 400 {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            self.cycle = 0;
+            self.canvas.buffer.fill(0);
+            self.tree = Tree::new();
         }
     }
 
     fn update(&mut self) {
-        self.snowflakes.iter_mut().for_each(|piece| piece.update());
+        if self.cycle % 1 == 0 {
+            self.tree.update();
+        }
     }
 
     fn draw(&mut self) {
@@ -175,18 +219,10 @@ impl Sketch {
         //     Vec2::new((WIDTH) as f32, HEIGHT as f32),
         // );
         // self.canvas.blend_mode = BlendMode::Replace;
-        self.canvas.buffer.fill(0);
+        self.canvas.buffer.fill(50);
         // self.canvas.dim(10);
         //self.canvas.random();
-        self.snowflakes
-            .iter()
-            .for_each(|piece| piece.draw(&mut self.canvas));
-
-        for (pos, c) in &self.santa {
-            self.canvas.pen_color = *c;
-            self.canvas
-                .draw_point(*pos + Vec2::new(WIDTH as f32 / 4.0, 20.0));
-        }
+        self.tree.draw(&mut self.canvas);
 
         if RECORD {
             self.ffmpeg
@@ -283,6 +319,30 @@ impl Canvas {
             change[3] = (change[3] as f32 * 0.05) as u8;
             self.pen_color = change;
             self.point_blend(i * 4);
+        }
+    }
+
+    pub fn fluffy_line(&mut self, start: Vec2, end: Vec2) {
+        let middle = (start + end) / 2.0;
+        let randomness = 12.0;
+        for _ in 0..4 {
+            self.select_color(fastrand::u8(0..PALETTE.len() as u8));
+            self.draw_curve(
+                start
+                    + Vec2::new(
+                        (fastrand::f32() - 0.5) * randomness,
+                        (fastrand::f32() - 0.5) * randomness,
+                    ),
+                middle
+                    + Vec2::new(
+                        (fastrand::f32() - 0.5) * randomness,
+                        (fastrand::f32() - 0.5) * randomness,
+                    ),
+                end + Vec2::new(
+                    (fastrand::f32() - 0.5) * randomness / 2.0,
+                    (fastrand::f32() - 0.5) * randomness / 2.0,
+                ),
+            )
         }
     }
 
