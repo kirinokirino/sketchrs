@@ -1,167 +1,53 @@
 use glam::Vec2;
 
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
+use std::f32::consts::{PI, TAU};
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
 
-const RECORD: bool = true;
+const RECORD: bool = false;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const PALETTE: [&'static str; 10] = [
-    "#de9f47", "#fdd179", "#fee1b8", "#d4c692", "#a6b04f", "#819447", "#44702d", "#2f4d2f",
-    "#546756", "#89a477",
-];
+const PALETTE: [&'static str; 4] = ["#d31055", "#ea6ba3", "#f3b2d4", "#fff0f0"];
 
 fn main() {
     let mut sketch = Sketch::new();
     sketch.run();
 }
 
-#[derive(Debug)]
-struct ConnectedNode {
-    self_id: usize,
-    connections: Vec<usize>,
-
-    pos: Vec2,
+struct Flower {
+    distance: f32,
+    angle: f32,
+    scale: f32,
+    points: Vec<Vec2>,
 }
 
-impl ConnectedNode {
-    fn new(self_id: usize, pos: Vec2) -> Self {
+impl Flower {
+    pub fn new(scale: f32) -> Self {
         Self {
-            self_id,
-            connections: Vec::new(),
-            pos,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Nodes {
-    nodes: Vec<ConnectedNode>,
-
-    selected_node: usize,
-}
-
-impl Nodes {
-    pub fn new(starting_node: Vec2) -> Self {
-        let nodes = vec![ConnectedNode::new(0, starting_node)];
-        Self {
-            nodes,
-            selected_node: 0,
+            distance: 0.0,
+            angle: 0.0,
+            scale,
+            points: Vec::new(),
         }
     }
 
-    pub fn append(&mut self, pos: Vec2) {
-        let connected = self.selected_node;
-        let mut node = ConnectedNode::new(self.nodes.len(), pos);
-        self.selected_node = self.nodes.len();
-        node.connections.push(connected);
-        self.nodes.push(node);
+    pub fn add_point(&mut self) {
+        let center = Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
+
+        let pos = center + Vec2::from_angle(self.angle.to_radians()) * self.distance;
+        self.points.push(pos);
+
+        self.angle += 137.5;
+        if self.angle >= 360.0 {
+            self.angle -= 360.0;
+        }
+        self.distance += 1.0;
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        for node in &self.nodes {
-            for other in &node.connections {
-                let other_node = &self.nodes[*other];
-                let (lower, upper) = sort_y(node.pos, other_node.pos);
-                canvas.fluffy_line(lower, upper);
-            }
-        }
-    }
-}
-
-fn sort_y(a: Vec2, b: Vec2) -> (Vec2, Vec2) {
-    if a.y > b.y {
-        (b, a)
-    } else {
-        (a, b)
-    }
-}
-
-#[derive(Debug)]
-struct GrowAgent {
-    pos: Vec2,
-    vel: Vec2,
-    acc: Vec2,
-}
-
-impl GrowAgent {
-    pub fn new(pos: Vec2, vel: Vec2) -> Self {
-        Self {
-            pos,
-            vel,
-            acc: Vec2::ZERO,
-        }
-    }
-
-    pub fn update(&mut self) {
-        let gravity = Vec2::new(0.0, 1.0);
-        let random =
-            Vec2::new(fastrand::f32() - 0.5, fastrand::f32() - 0.5) * fastrand::f32() * 3.0;
-        self.acc += gravity;
-        self.acc += random;
-        self.vel += self.acc;
-        self.pos += self.vel;
-
-        self.acc = Vec2::ZERO;
-    }
-}
-
-#[derive(Debug)]
-struct Tree {
-    trunk: Nodes,
-    grow_agent: GrowAgent,
-    force: f32,
-}
-
-impl Tree {
-    fn new() -> Self {
-        let starting_pos = Vec2::new((WIDTH / 2) as f32, HEIGHT as f32);
-        let trunk = Nodes::new(starting_pos);
-        let force = -5.0 + -20.0 * fastrand::f32();
-        let grow_agent = GrowAgent::new(
-            starting_pos,
-            Vec2::new((fastrand::f32() - 0.5) * 5.0, force),
-        );
-
-        Self {
-            trunk,
-            grow_agent,
-            force,
-        }
-    }
-
-    pub fn update(&mut self) {
-        self.grow();
-    }
-
-    pub fn draw(&self, canvas: &mut Canvas) {
-        //canvas.draw_circle(self.grow_agent.pos, 5.0);
-        self.trunk.draw(canvas);
-    }
-
-    fn grow(&mut self) {
-        let pos = self.grow_agent.pos;
-        self.grow_agent.update();
-        self.trunk.append(pos);
-        self.maybe_start_branch();
-    }
-
-    fn maybe_start_branch(&mut self) {
-        if self.grow_agent.vel.y >= 10.0 {
-            let mut idx = 0;
-            for _ in 0..10 {
-                idx = fastrand::usize(0..self.trunk.nodes.len());
-                if idx < fastrand::usize(0..self.trunk.nodes.len()) {
-                    break;
-                }
-            }
-            let pos = &self.trunk.nodes[idx].pos;
-            self.trunk.selected_node = idx;
-            self.force *= 0.9;
-            let vel = Vec2::new((fastrand::f32() - 0.5) * 10.0, self.force);
-            self.grow_agent.pos = *pos;
-            self.grow_agent.vel = vel;
+        for (i, points) in self.points.iter().as_slice().windows(3).enumerate() {
+            canvas.pen_color = hex_to_rgb(&PALETTE[i % 4]);
+            canvas.draw_curve(points[0].clone(), points[1], points[2]);
         }
     }
 }
@@ -170,43 +56,35 @@ struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
     cycle: usize,
-    tree: Tree,
+    flower: Flower,
 }
 
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
+        let flower = Flower::new(2.0);
 
         Self {
             canvas,
             ffmpeg,
             cycle: 0,
-            tree: Tree::new(),
+            flower,
         }
     }
 
     pub fn run(&mut self) {
         loop {
-            loop {
-                self.update();
-                self.draw();
-                //std::thread::sleep(std::time::Duration::from_millis(30));
-                self.cycle += 1;
-                if self.cycle >= 400 {
-                    break;
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-            self.cycle = 0;
-            self.canvas.buffer.fill(0);
-            self.tree = Tree::new();
+            self.update();
+            self.draw();
+            //std::thread::sleep(std::time::Duration::from_millis(30));
+            self.cycle += 1;
         }
     }
 
     fn update(&mut self) {
         if self.cycle % 1 == 0 {
-            self.tree.update();
+            self.flower.add_point();
         }
     }
 
@@ -219,10 +97,11 @@ impl Sketch {
         //     Vec2::new((WIDTH) as f32, HEIGHT as f32),
         // );
         // self.canvas.blend_mode = BlendMode::Replace;
-        self.canvas.buffer.fill(50);
+        self.canvas.buffer.fill(0);
         // self.canvas.dim(10);
         //self.canvas.random();
-        self.tree.draw(&mut self.canvas);
+        self.canvas.pen_color = hex_to_rgb(&PALETTE[0]);
+        self.flower.draw(&mut self.canvas);
 
         if RECORD {
             self.ffmpeg
