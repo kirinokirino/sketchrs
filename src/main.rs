@@ -41,13 +41,19 @@ impl Flower {
         if self.angle >= 360.0 {
             self.angle -= 360.0;
         }
-        self.distance += 1.0;
+        self.distance += 0.2;
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        for (i, points) in self.points.iter().as_slice().windows(3).enumerate() {
+        fastrand::seed(0);
+        for (i, points) in self.points.iter().as_slice().windows(5).enumerate() {
             canvas.pen_color = hex_to_rgb(&PALETTE[i % 4]);
-            canvas.draw_curve(points[0].clone(), points[1], points[2]);
+            canvas.draw_curve_dots(
+                points[0].clone(),
+                points[fastrand::usize(2..5)],
+                points[1],
+                0.05,
+            );
         }
     }
 }
@@ -119,7 +125,7 @@ impl Sketch {
 
     fn ffmpeg() -> Option<ChildStdin> {
         let ffmpeg_command = "/usr/bin/ffmpeg";
-        let args = "-y -f rawvideo -vcodec rawvideo -s 640x480 -pix_fmt rgba -r 30 -i - -an -vcodec h264 -pix_fmt yuv420p -crf 15 /home/kirinokirino/Media/video.mp4".split(' ');
+        let args = "-y -f rawvideo -vcodec rawvideo -s 640x480 -pix_fmt rgba -r 30 -i - -an -vcodec h264 -pix_fmt yuv420p -crf 15 /home/k/Media/video.mp4".split(' ');
         if RECORD {
             Some(
                 Command::new(ffmpeg_command)
@@ -227,6 +233,21 @@ impl Canvas {
 
     fn draw_curve(&mut self, start: Vec2, control: Vec2, end: Vec2) {
         let points = start.distance(control) + control.distance(end) + end.distance(start);
+        for i in 1..points as usize {
+            let proportion = i as f32 / points;
+            let path1 = control - start;
+            let point1 = start + path1 * proportion;
+            let path2 = end - control;
+            let point2 = control + path2 * proportion;
+            let path3 = point2 - point1;
+            let point3 = point1 + path3 * proportion;
+            self.draw_point(point3);
+        }
+    }
+
+    fn draw_curve_dots(&mut self, start: Vec2, control: Vec2, end: Vec2, dots_density: f32) {
+        let points =
+            (start.distance(control) + control.distance(end) + end.distance(start)) * dots_density;
         for i in 1..points as usize {
             let proportion = i as f32 / points;
             let path1 = control - start;
