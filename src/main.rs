@@ -7,11 +7,29 @@ use std::process::{ChildStdin, Command, Stdio};
 const RECORD: bool = false;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const PALETTE: [&'static str; 4] = ["#d31055", "#ea6ba3", "#f3b2d4", "#fff0f0"];
+const PALETTE: [&'static str; 5] = ["#ffffff", "#d31055", "#ea6ba3", "#f3b2d4", "#fff0f0"];
 
 fn main() {
     let mut sketch = Sketch::new();
     sketch.run();
+}
+
+struct Image {
+    origin: Vec2,
+    width: usize,
+    height: usize,
+    pub data: Vec<usize>,
+}
+
+impl Image {
+    fn new(origin: Vec2, width: usize, height: usize) -> Self {
+        Self {
+            origin,
+            width,
+            height,
+            data: vec![0; width * height],
+        }
+    }
 }
 
 struct Flower {
@@ -19,6 +37,7 @@ struct Flower {
     angle: f32,
     scale: f32,
     points: Vec<Vec2>,
+    image: Option<Image>,
 }
 
 impl Flower {
@@ -28,6 +47,7 @@ impl Flower {
             angle: 0.0,
             scale,
             points: Vec::new(),
+            image: None,
         }
     }
 
@@ -45,17 +65,84 @@ impl Flower {
     }
 
     pub fn draw(&self, canvas: &mut Canvas) {
-        fastrand::seed(0);
-        for (i, points) in self.points.iter().as_slice().windows(5).enumerate() {
-            canvas.pen_color = hex_to_rgb(&PALETTE[i % 4]);
-            canvas.draw_curve_dots(
-                points[0].clone(),
-                points[fastrand::usize(2..5)],
-                points[1],
-                0.05,
-            );
+        if let Some(image) = &self.image {
+            println!("IMAGE {} {} {}", image.origin, image.width, image.height);
+            for (idx, palette_color) in image.data.iter().enumerate() {
+                let x = image.origin.x + (idx % image.width) as f32;
+                let y = image.origin.y + (idx / image.width) as f32;
+                let pos = Vec2::new(x, y);
+                if *palette_color == 0 {
+                    canvas.transparent();
+                } else {
+                    canvas.select_color(*palette_color as u8);
+                }
+                canvas.draw_point(pos)
+            }
         }
     }
+
+    fn generate_image(&mut self) {
+        let mut min_x = 9999.0;
+        let mut min_y = 9999.0;
+        let mut max_x = -9999.0;
+        let mut max_y = -9999.0;
+        for point in &self.points {
+            let (x, y) = (point.x, point.y);
+            if x < min_x {
+                min_x = x;
+            }
+            if x > max_x {
+                max_x = x;
+            }
+            if y < min_y {
+                min_y = y;
+            }
+            if y > max_y {
+                max_y = y;
+            }
+        }
+
+        let origin = Vec2::new(min_x, min_y);
+        let width = (max_x - min_x).ceil().max(1.0) as usize;
+        let height = (max_y - min_y).ceil().max(1.0) as usize;
+        let mut image = Image::new(origin, width, height);
+
+        let voronoi = true;
+        let center = Vec2::new((width / 2) as f32, (height / 2) as f32);
+        if voronoi {
+            for x in 0..width {
+                for y in 0..height {
+                    let point = Vec2::new(x as f32, y as f32);
+                    if point.distance(center) > self.distance {
+                        continue;
+                    }
+                    let closest = find_closest(point + origin, &self.points);
+                    image.data[x + y * width] = 1 + closest % 4;
+                }
+            }
+        } else {
+            for (i, point) in self.points.iter().enumerate() {
+                let color = i % 4;
+                let local_point = *point - origin;
+                let idx = local_point.x as usize + local_point.y as usize * width;
+                image.data[idx] = 1 + color;
+            }
+        }
+        self.image = Some(image);
+    }
+}
+
+fn find_closest(point: Vec2, points: &[Vec2]) -> usize {
+    let mut min_distance = 99999.0;
+    let mut idx = 0;
+    for (i, other) in points.iter().enumerate() {
+        let dist = point.distance(*other);
+        if dist < min_distance {
+            min_distance = dist;
+            idx = i
+        }
+    }
+    idx
 }
 
 struct Sketch {
@@ -91,6 +178,16 @@ impl Sketch {
     fn update(&mut self) {
         if self.cycle % 1 == 0 {
             self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.add_point();
+            self.flower.generate_image();
         }
     }
 
@@ -157,11 +254,7 @@ struct Canvas {
 
 impl Canvas {
     pub fn new(palette: Vec<[u8; 4]>) -> Self {
-        let mut buffer = Vec::with_capacity(WIDTH * HEIGHT * 4);
-        unsafe {
-            buffer.set_len(buffer.capacity());
-        }
-        buffer.fill(255);
+        let mut buffer = vec![255u8; WIDTH * HEIGHT * 4];
         let pen_color = [255, 255, 255, 255];
         Self {
             buffer,
@@ -173,6 +266,10 @@ impl Canvas {
 
     pub fn select_color(&mut self, color: u8) {
         self.pen_color = self.palette[color as usize % self.palette.len()]
+    }
+
+    pub fn transparent(&mut self) {
+        self.pen_color = [0, 0, 0, 0];
     }
 
     pub fn dim(&mut self, value: i16) {
@@ -205,6 +302,10 @@ impl Canvas {
             self.pen_color = change;
             self.point_blend(i * 4);
         }
+    }
+
+    pub fn draw_buffer(&mut self, image: &Image) {
+        todo!();
     }
 
     pub fn fluffy_line(&mut self, start: Vec2, end: Vec2) {

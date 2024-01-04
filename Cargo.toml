@@ -10,4 +10,4 @@ fastrand = "2.0"
 glam = "0.24"
 memmap2 = "0.9"
 
-image = { version = "0.24", features = ["png"], default-features = false }
+# image = { version = "0.24", features = ["png"], default-features = false }
