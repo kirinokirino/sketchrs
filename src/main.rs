@@ -4,7 +4,19 @@ use std::f32::consts::{PI, TAU};
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
 
+#[cfg(feature = "record")]
+const RECORD: bool = true;
+#[cfg(not(feature = "record"))]
 const RECORD: bool = false;
+#[cfg(feature = "imagesink")]
+const IMAGESINK: bool = true;
+#[cfg(not(feature = "imagesink"))]
+const IMAGESINK: bool = false;
+#[cfg(feature = "window")]
+const WINDOW: bool = true;
+#[cfg(not(feature = "window"))]
+const WINDOW: bool = false;
+
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 const PALETTE: [&'static str; 5] = ["#ffffff", "#d31055", "#ea6ba3", "#f3b2d4", "#fff0f0"];
@@ -148,6 +160,7 @@ fn find_closest(point: Vec2, points: &[Vec2]) -> usize {
 struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
+    window: Option<Window>,
     cycle: usize,
     flower: Flower,
 }
@@ -155,18 +168,21 @@ struct Sketch {
 impl Sketch {
     pub fn new() -> Self {
         let ffmpeg = Self::ffmpeg();
+        let window = Self::window();
         let canvas = Self::canvas();
         let flower = Flower::new(2.0);
 
         Self {
             canvas,
             ffmpeg,
+            window,
             cycle: 0,
             flower,
         }
     }
 
     pub fn run(&mut self) {
+        //TODO window.run_loop();
         loop {
             self.update();
             self.draw();
@@ -238,6 +254,48 @@ impl Sketch {
             None
         }
     }
+
+    fn window() -> Option<Window> {
+        #[cfg(feature = "window")]
+        if WINDOW {
+            use speedy2d::window::{WindowCreationOptions, WindowPosition, WindowSize};
+
+            use glam::UVec2;
+
+            let window_size = UVec2::new(WIDTH as u32, HEIGHT as u32);
+            let window_pixels = WindowSize::PhysicalPixels(window_size);
+            let window = speedy2d::Window::new_with_options(
+                "FLOATING",
+                WindowCreationOptions::new_windowed(window_pixels, Some(WindowPosition::Center))
+                    .with_decorations(false)
+                    .with_transparent(false),
+            );
+            Some(Window::new(window.unwrap()))
+        } else {
+            None
+        }
+        #[cfg(not(feature = "window"))]
+        None
+    }
+}
+
+struct Window {
+    #[cfg(feature = "window")]
+    internal: speedy2d::Window,
+}
+
+#[cfg(feature = "window")]
+impl Window {
+    fn new(window: speedy2d::Window) -> Self {
+        Self { internal: window }
+    }
+}
+
+#[cfg(not(feature = "window"))]
+impl Window {
+    fn new() -> Self {
+        Self {}
+    }
 }
 
 enum BlendMode {
@@ -280,19 +338,21 @@ impl Canvas {
     }
 
     pub fn display(&self) {
-        let file = std::fs::File::options()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open("/tmp/imagesink")
-            .unwrap();
-        let size = 640 * 480 * 4;
-        file.set_len(size.try_into().unwrap()).unwrap();
-        let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file).unwrap() };
-        if let Some(err) = mmap.lock().err() {
-            panic!("{err}");
+        if IMAGESINK {
+            let file = std::fs::File::options()
+                .create(true)
+                .read(true)
+                .write(true)
+                .open("/tmp/imagesink")
+                .unwrap();
+            let size = 640 * 480 * 4;
+            file.set_len(size.try_into().unwrap()).unwrap();
+            let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file).unwrap() };
+            if let Some(err) = mmap.lock().err() {
+                panic!("{err}");
+            }
+            let _ = (&mut mmap[..]).write_all(&self.buffer.as_slice());
         }
-        let _ = (&mut mmap[..]).write_all(&self.buffer.as_slice());
     }
 
     fn random(&mut self) {

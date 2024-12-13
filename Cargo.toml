@@ -8,6 +8,18 @@ edition = "2021"
 [dependencies]
 fastrand = "2.1"
 glam = "0.29"
-memmap2 = "0.9"
-
+memmap2 = { version = "0.9", optional = true }
+speedy2d = { version = "2.1", git="https://github.com/kirinokirino/speedy2d", default-features = false, features = ["windowing-wayland", "windowing"], optional = true }
 # image = { version = "0.24", features = ["png"], default-features = false }
+
+[features]
+default = ["imagesink"]
+
+# records the video with ffmpeg
+record = []
+
+# use speedy2d for output
+window = ["speedy2d"]
+
+# use imagesink for output
+imagesink = ["memmap2"]
