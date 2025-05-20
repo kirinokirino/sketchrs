@@ -1,13 +1,13 @@
 use glam::UVec2;
-use speedy2d::color::Color;
-use speedy2d::image::{ImageDataType, ImageHandle, ImageSmoothingMode};
-use speedy2d::window::{WindowCreationOptions, WindowHandler, WindowHelper, WindowSize};
-use speedy2d::{Graphics2D, Window};
-
 use memmap2::Mmap;
 use std::env;
 use std::fs::File;
 use std::io::Write;
+use std::time::{Duration, Instant};
+
+use sdl2::event::Event;
+use sdl2::pixels::PixelFormatEnum;
+use sdl2::rect::Rect;
 
 const WIDTH: u16 = 640;
 const HEIGHT: u16 = 480;
@@ -22,6 +22,8 @@ fn main() {
     } else {
         (WIDTH, HEIGHT)
     };
+
+    let mmap_size = usize::from(width) * usize::from(height) * 4;
     let mut file = File::options()
         .create(true)
         .truncate(true)
@@ -29,50 +31,52 @@ fn main() {
         .write(true)
         .open("/tmp/imagesink")
         .unwrap();
-    let _ = file.write_all(vec![0; usize::from(width) * usize::from(height) * 4].as_slice());
+    let _ = file.write_all(&vec![0; mmap_size]);
 
     let mmap = unsafe { Mmap::map(&file).unwrap() };
-    let _ = mmap.lock();
 
-    let size = UVec2::new(u32::from(width), u32::from(height));
-    let window_size = WindowSize::PhysicalPixels(size);
-    let window_options = WindowCreationOptions::new_windowed(window_size, None)
-        .with_decorations(false)
-        .with_transparent(true)
-        .with_resizable(false);
-    let window = Window::new_with_options("FLOATING", window_options).unwrap();
-    window.run_loop(MyWindowHandler {
-        mmap,
-        width,
-        height,
-    });
-}
+    let sdl = sdl2::init().unwrap();
+    let video = sdl.video().unwrap();
+    let window = video
+        .window("imagesink", width.into(), height.into())
+        .position_centered()
+        .opengl()
+        .resizable()
+        .build()
+        .unwrap();
 
-struct MyWindowHandler {
-    //image: Option<ImageHandle>,
-    mmap: Mmap,
-    width: u16,
-    height: u16,
-}
+    let mut canvas = window.into_canvas().accelerated().present_vsync().build().unwrap();
+    let texture_creator = canvas.texture_creator();
+    let mut texture = texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGBA8888, width.into(), height.into())
+        .unwrap();
 
-impl WindowHandler for MyWindowHandler {
-    fn on_draw(&mut self, helper: &mut WindowHelper, graphics: &mut Graphics2D) {
-        let image: ImageHandle = graphics
-            .create_image_from_raw_pixels(
-                ImageDataType::RGBA,
-                ImageSmoothingMode::NearestNeighbor,
-                UVec2::new(u32::from(self.width), u32::from(self.height)),
-                &self.mmap[..],
-            )
+    let mut event_pump = sdl.event_pump().unwrap();
+    let mut last_frame = Instant::now();
+
+    'running: loop {
+        for event in event_pump.poll_iter() {
+            if let Event::Quit { .. } = event {
+                break 'running;
+            }
+        }
+
+        // Lock and update texture from mmap
+        texture
+            .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+                buffer.copy_from_slice(&mmap[..]);
+            })
             .unwrap();
 
-        helper.set_size_pixels(*image.size());
+        canvas.clear();
+        canvas.copy(&texture, None, Some(Rect::new(0, 0, width.into(), height.into()))).unwrap();
+        canvas.present();
 
-        graphics.clear_screen(Color::TRANSPARENT);
-
-        graphics.draw_image((0.0, 0.0), &image);
-        helper.request_redraw();
+        // Frame cap (optional)
+        let frame_time = last_frame.elapsed();
+        if frame_time < Duration::from_millis(16) {
+            std::thread::sleep(Duration::from_millis(16) - frame_time);
+        }
+        last_frame = Instant::now();
     }
-
-    // If desired, on_mouse_move(), on_key_down(), etc...
 }
