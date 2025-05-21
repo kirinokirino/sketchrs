@@ -48,7 +48,7 @@ fn main() {
     let mut canvas = window.into_canvas().accelerated().present_vsync().build().unwrap();
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
-        .create_texture_streaming(PixelFormatEnum::RGBA8888, width.into(), height.into())
+        .create_texture_streaming(PixelFormatEnum::ABGR8888, width.into(), height.into())
         .unwrap();
 
     let mut event_pump = sdl.event_pump().unwrap();
