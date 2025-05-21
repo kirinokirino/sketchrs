@@ -1,211 +1,69 @@
 use glam::Vec2;
 
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::PI;
 use std::io::Write;
 use std::process::{ChildStdin, Command, Stdio};
 
 const RECORD: bool = false;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const PALETTE: [&'static str; 5] = ["#ffffff", "#d31055", "#ea6ba3", "#f3b2d4", "#fff0f0"];
 
 fn main() {
     let mut sketch = Sketch::new();
     sketch.run();
 }
 
-struct Image {
-    origin: Vec2,
-    width: usize,
-    height: usize,
-    pub data: Vec<usize>,
-}
-
-impl Image {
-    fn new(origin: Vec2, width: usize, height: usize) -> Self {
-        Self {
-            origin,
-            width,
-            height,
-            data: vec![0; width * height],
-        }
-    }
-}
-
-struct Flower {
-    distance: f32,
-    angle: f32,
-    scale: f32,
-    points: Vec<Vec2>,
-    image: Option<Image>,
-}
-
-impl Flower {
-    pub fn new(scale: f32) -> Self {
-        Self {
-            distance: 0.0,
-            angle: 0.0,
-            scale,
-            points: Vec::new(),
-            image: None,
-        }
-    }
-
-    pub fn add_point(&mut self) {
-        let center = Vec2::new((WIDTH / 2) as f32, (HEIGHT / 2) as f32);
-
-        let pos = center + Vec2::from_angle(self.angle.to_radians()) * self.distance;
-        self.points.push(pos);
-
-        self.angle += 137.5;
-        if self.angle >= 360.0 {
-            self.angle -= 360.0;
-        }
-        self.distance += 0.2;
-    }
-
-    pub fn draw(&self, canvas: &mut Canvas) {
-        if let Some(image) = &self.image {
-            println!("IMAGE {} {} {}", image.origin, image.width, image.height);
-            for (idx, palette_color) in image.data.iter().enumerate() {
-                let x = image.origin.x + (idx % image.width) as f32;
-                let y = image.origin.y + (idx / image.width) as f32;
-                let pos = Vec2::new(x, y);
-                if *palette_color == 0 {
-                    canvas.transparent();
-                } else {
-                    canvas.select_color(*palette_color as u8);
-                }
-                canvas.draw_point(pos)
-            }
-        }
-    }
-
-    fn generate_image(&mut self) {
-        let mut min_x = 9999.0;
-        let mut min_y = 9999.0;
-        let mut max_x = -9999.0;
-        let mut max_y = -9999.0;
-        for point in &self.points {
-            let (x, y) = (point.x, point.y);
-            if x < min_x {
-                min_x = x;
-            }
-            if x > max_x {
-                max_x = x;
-            }
-            if y < min_y {
-                min_y = y;
-            }
-            if y > max_y {
-                max_y = y;
-            }
-        }
-
-        let origin = Vec2::new(min_x, min_y);
-        let width = (max_x - min_x).ceil().max(1.0) as usize;
-        let height = (max_y - min_y).ceil().max(1.0) as usize;
-        let mut image = Image::new(origin, width, height);
-
-        let voronoi = true;
-        let center = Vec2::new((width / 2) as f32, (height / 2) as f32);
-        if voronoi {
-            for x in 0..width {
-                for y in 0..height {
-                    let point = Vec2::new(x as f32, y as f32);
-                    if point.distance(center) > self.distance {
-                        continue;
-                    }
-                    let closest = find_closest(point + origin, &self.points);
-                    image.data[x + y * width] = 1 + closest % 4;
-                }
-            }
-        } else {
-            for (i, point) in self.points.iter().enumerate() {
-                let color = i % 4;
-                let local_point = *point - origin;
-                let idx = local_point.x as usize + local_point.y as usize * width;
-                image.data[idx] = 1 + color;
-            }
-        }
-        self.image = Some(image);
-    }
-}
-
-fn find_closest(point: Vec2, points: &[Vec2]) -> usize {
-    let mut min_distance = 99999.0;
-    let mut idx = 0;
-    for (i, other) in points.iter().enumerate() {
-        let dist = point.distance(*other);
-        if dist < min_distance {
-            min_distance = dist;
-            idx = i
-        }
-    }
-    idx
-}
-
 struct Sketch {
     canvas: Canvas,
     ffmpeg: Option<ChildStdin>,
-    cycle: usize,
-    flower: Flower,
+    palette: Vec<[u8; 4]>,
+    dispersion_matrix: Vec<f32>,
 }
 
 impl Sketch {
     pub fn new() -> Self {
+        let palette = [
+            "#0e0e12", "#1a1a24", "#333346", "#535373", "#8080a4", "#a6a6bf", "#c1c1d2", "#e6e6ec",
+        ]
+        .iter()
+        .map(hex_to_rgb)
+        .collect::<Vec<_>>();
+
+        let dispersion_matrix = vec![0.11, 0.77, 0.44, 0.55, 0.88, 0.33, 0.66, 0.22, 1.0];
+
         let ffmpeg = Self::ffmpeg();
         let canvas = Self::canvas();
-        let flower = Flower::new(2.0);
 
         Self {
             canvas,
             ffmpeg,
-            cycle: 0,
-            flower,
+            palette,
+            dispersion_matrix,
         }
     }
 
     pub fn run(&mut self) {
-        loop {
-            self.update();
-            self.draw();
-            //std::thread::sleep(std::time::Duration::from_millis(30));
-            self.cycle += 1;
+        let target = Vec2::new(WIDTH as f32 / 2.0, HEIGHT as f32 * 2.0);
+        let min_distance = Vec2::new(WIDTH as f32 / 2.0, HEIGHT as f32).distance_squared(target);
+        let max_distance = Vec2::new(0.0, 0.0).distance_squared(target);
+        for x in 0..WIDTH {
+            for y in 0..HEIGHT {
+                let pos = Vec2::new(x as f32, y as f32);
+                let distance = pos.distance_squared(target);
+                let gradient = map(distance, min_distance, max_distance, 0.0, 1.0);
+                let color = self.dispersed_pixel_color(pos, gradient);
+                self.canvas.pen_color = color;
+                self.canvas.draw_point(pos);
+            }
         }
-    }
 
-    fn update(&mut self) {
-        if self.cycle % 1 == 0 {
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.add_point();
-            self.flower.generate_image();
+        loop {
+            self.draw();
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }
 
     fn draw(&mut self) {
-        // self.canvas.blend_mode = BlendMode::Blend;
-        // self.canvas.pen_color = hex_to_rgb(&PALETTE[PALETTE.len() - 1]);
-        // self.canvas.pen_color[3] = 20;
-        // self.canvas.draw_square(
-        //     Vec2::new(0.0, 0.0),
-        //     Vec2::new((WIDTH) as f32, HEIGHT as f32),
-        // );
-        // self.canvas.blend_mode = BlendMode::Replace;
-        self.canvas.buffer.fill(0);
-        // self.canvas.dim(10);
-        //self.canvas.random();
-        self.canvas.pen_color = hex_to_rgb(&PALETTE[0]);
-        self.flower.draw(&mut self.canvas);
-
         if RECORD {
             self.ffmpeg
                 .as_mut()
@@ -214,10 +72,31 @@ impl Sketch {
         self.canvas.display();
     }
 
+    fn dispersed_pixel_color(&self, pos: Vec2, brightness: f32) -> [u8; 4] {
+        let x = pos.x as usize;
+        let y = pos.y as usize;
+        let index = (x.overflowing_sub(y * 3).0) % self.dispersion_matrix.len();
+        let dispersion = self.dispersion_matrix[index] * self.brightness_step();
+        let brightness = (brightness - self.brightness_step()) + dispersion;
+        self.color_by_brightness(brightness)
+    }
+
+    fn color_by_brightness(&self, brightness: f32) -> [u8; 4] {
+        let step = self.brightness_step();
+        let index = (brightness / step).round() as usize;
+        if index >= self.palette.len() {
+            return self.palette.last().unwrap().clone();
+        }
+        self.palette[index]
+    }
+
+    fn brightness_step(&self) -> f32 {
+        let step = 1.0 / self.palette.len() as f32;
+        step
+    }
+
     fn canvas() -> Canvas {
-        let mut palette: Vec<_> = PALETTE.iter().map(hex_to_rgb).collect();
-        palette.extend([[0, 0, 0, 0]].repeat(1));
-        Canvas::new(palette)
+        Canvas::new()
     }
 
     fn ffmpeg() -> Option<ChildStdin> {
@@ -239,7 +118,7 @@ impl Sketch {
         }
     }
 }
-
+#[derive(PartialEq)]
 enum BlendMode {
     Replace,
     Blend,
@@ -247,25 +126,19 @@ enum BlendMode {
 
 struct Canvas {
     pub buffer: Vec<u8>,
-    palette: Vec<[u8; 4]>,
     pub pen_color: [u8; 4],
     blend_mode: BlendMode,
 }
 
 impl Canvas {
-    pub fn new(palette: Vec<[u8; 4]>) -> Self {
-        let mut buffer = vec![255u8; WIDTH * HEIGHT * 4];
+    pub fn new() -> Self {
+        let buffer = vec![255u8; WIDTH * HEIGHT * 4];
         let pen_color = [255, 255, 255, 255];
         Self {
             buffer,
-            palette,
             pen_color,
             blend_mode: BlendMode::Replace,
         }
-    }
-
-    pub fn select_color(&mut self, color: u8) {
-        self.pen_color = self.palette[color as usize % self.palette.len()]
     }
 
     pub fn transparent(&mut self) {
@@ -295,24 +168,10 @@ impl Canvas {
         let _ = (&mut mmap[..]).write_all(&self.buffer.as_slice());
     }
 
-    fn random(&mut self) {
-        for i in 0..self.buffer.len() / 4 {
-            let mut change = self.palette[fastrand::usize(0..self.palette.len())];
-            change[3] = (change[3] as f32 * 0.05) as u8;
-            self.pen_color = change;
-            self.point_blend(i * 4);
-        }
-    }
-
-    pub fn draw_buffer(&mut self, image: &Image) {
-        todo!();
-    }
-
     pub fn fluffy_line(&mut self, start: Vec2, end: Vec2) {
         let middle = (start + end) / 2.0;
         let randomness = 12.0;
         for _ in 0..4 {
-            self.select_color(fastrand::u8(0..PALETTE.len() as u8));
             self.draw_curve(
                 start
                     + Vec2::new(
@@ -379,11 +238,10 @@ impl Canvas {
         let bottom_y = (pos.y + radius) as usize;
         for offset_x in left_x..=right_x {
             for offset_y in top_y..=bottom_y {
-                if ((offset_x as f32 - pos.x as f32).powi(2)
-                    + (offset_y as f32 - pos.y as f32).powi(2))
-                .sqrt()
-                    < radius
-                {
+                let distance = (offset_x as f32 - pos.x as f32).powi(2)
+                    + (offset_y as f32 - pos.y as f32).powi(2);
+                if distance.sqrt() < radius {
+                    let brightness = map(distance.sqrt(), 0.0, radius, 0.0, 1.0);
                     self.draw_point(Vec2::new(offset_x as f32, offset_y as f32));
                 }
             }
@@ -401,7 +259,7 @@ impl Canvas {
         }
     }
 
-    fn draw_square(&mut self, top_left: Vec2, bottom_right: Vec2) {
+    fn draw_rectangle(&mut self, top_left: Vec2, bottom_right: Vec2) {
         for offset_x in top_left.x as usize..=bottom_right.x as usize {
             for offset_y in top_left.y as usize..=bottom_right.y as usize {
                 self.draw_point(Vec2::new(offset_x as f32, offset_y as f32));
@@ -472,4 +330,8 @@ fn hex_to_rgb(hex: &&str) -> [u8; 4] {
 
 pub fn map(value: f32, start1: f32, stop1: f32, start2: f32, stop2: f32) -> f32 {
     (value - start1) / (stop1 - start1) * (stop2 - start2) + start2
+}
+
+pub fn lerp(t: f32, start: f32, stop: f32) -> f32 {
+    start + t * (stop - start)
 }
